@@ -1,0 +1,128 @@
+#!/bin/sh
+#
+# Original Author:
+#    Miguel Gila <miguel.gila@cscs.ch>
+# Editor:    
+#    HonWai Leong <hwleong@illinois.edu>
+# Edited for JYC & Blue Waters. 
+
+#
+# shifter-imagegw This starts and stops shifter-imagegw
+#
+# chkconfig: 2345 11 88
+# description: todo
+#
+# config: /etc/sysconfig/shifter-imagegw
+# pidfile: /var/run/shifter-imagegw.pid
+#
+#
+
+### BEGIN INIT INFO
+# Provides:       shifter-imagegw-v18
+# Required-Start: $mongod 
+# Required-Stop: $mongod
+# Default-Start:  2 3 5
+# Default-Stop:   0 1 6
+# Short-Description: shifter-imagegw_ver_18.03.0
+# Description:    Shifter Image Gateway Service Daemon
+### END INIT INFO
+
+# Source function library.
+#. /etc/rc.d/init.d/functions
+. /etc/rc.status
+rc_reset
+
+#PATH=/usr/bin:/sbin:/bin:/usr/sbin
+#export PATH
+SHIFTER_PATH=/opt/cray/shifter/18.03.4-1
+# export PYTHON_VENV=/opt/cray/shifter/18.03.0-1/imagegw_venv/
+export PYTHON_VENV=/u/system/shifter/imagegw_venv/
+export ROOT_TREE=/opt/cray/shifter/18.03.4-1/usr/lib64/shifter/
+export PATH=$PYTHON_VENV/bin:$SHIFTER_PATH/usr/bin:$SHIFTER_PATH/bin:$PATH
+
+# 2020-01-14: Previously this was set, but not in the new RPM
+# export PYTHONPATH=${SHIFTER_PATH}/lib64/python2.6/site-packages
+export PYTHONPATH=/opt/cray/shifter/18.03.4-1/usr/lib64/python2.6/site-packages:/opt/cray/shifter/18.03.4-1/usr/lib/python2.7/site-packages:/opt/cray/shifter/18.03.4-1/usr/lib/python2.7
+[ -f /etc/sysconfig/shifter-imagegw ] && . /etc/sysconfig/shifter-imagegw
+lockfile=${LOCKFILE-/var/lock/subsys/shifter-imagegw}
+PIDFILE=/var/run/shifter-imagegw.pid
+# command=${SHIFTER_PATH}/usr/share/doc/packages/shifter-imagegw/contrib/shifter-imagegw
+command="/u/system/shifter/imagegw_venv/bin/gunicorn -b 0.0.0.0:5000 --backlog 2048 --log-level debug --access-logfile=/var/log/shifter_imagegw/access.log --log-file=/var/log/shifter_imagegw/error.log shifter_imagegw.api:app"
+RETVAL=0
+util='shifter-imagegw'
+
+start() {
+    #echo -n "Starting ${util}: "
+    #if [ -s $PIDFILE ]; then
+    #  RETVAL=1
+    #  echo -n "Already running!" #&& warning
+    #  echo
+    #else
+      #nohup ${command} 2>&1 > /var/log/${util}-18.log &
+      lockfile -r 0 $lockfile || { echo shifter-imagegw service is already running. && exit -1; }
+      echo -n "Starting ${util}: "
+      ulimit -S -n 8192; ulimit -H -n 16384
+      startproc -u shifter ${command} >> /var/log/${util}-18.log 2>&1
+      sleep 5
+      pidofproc /u/system/shifter/imagegw_venv/bin/gunicorn > $PIDFILE 2>/dev/null
+      #RETVAL=$?
+      #PID=$!
+      #rc_status -v
+      #[ $RETVAL = 0 ] && touch ${lockfile} && success || failure
+      #echo
+      #echo $PID > ${pidfile}
+    #fi
+    rc_status -v
+}
+
+stop() {
+    echo -n $"Stopping ${util}: "
+    #killproc $pidopts $command
+    killproc -p $PIDFILE shifter-imagegw
+    #killall ${SHIFTER_PATH}/imagegw_venv/bin/python
+    # killall /u/system/shifter/imagegw_venv/bin/python
+    killall /u/system/shifter/imagegw_venv/bin/gunicorn
+    rm $lockfile
+    #RETVAL=$?
+    #echo
+    #[ $RETVAL = 0 ] && rm -f ${lockfile} ${pidfile}
+    rc_status -v
+}
+
+restart() {
+    stop
+    start
+}
+
+rh_status() {
+    #status $pidopts $command
+    checkproc -p $PIDFILE /u/system/shifter/imagegw_venv/bin/gunicorn
+    # checkproc -p $PIDFILE shifter-imagegw
+    #RETVAL=$?
+    rc_status -v
+    #return $RETVAL
+}
+
+rh_status_q() {
+    rh_status >/dev/null 2>&1
+}
+
+case "$1" in
+    start)
+        start
+    ;;
+    stop)
+        stop
+    ;;
+    restart)
+        restart
+    ;;
+    status)
+        rh_status
+    ;;
+    *)
+        echo $"Usage: $0 {start|stop|status|restart}"
+        exit 1
+esac
+rc_exit
+#exit $RETVAL
