@@ -1,0 +1,4 @@
+Host *
+  StrictHostKeyChecking no
+  Port 1204
+  IdentityFile ~/.udiRoot/id_rsa.key

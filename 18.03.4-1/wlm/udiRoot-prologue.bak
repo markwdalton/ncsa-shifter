@@ -1,0 +1,207 @@
+#!/bin/bash
+##  Based on the Cray CCM Prologue, Heavily modified by NERSC
+# Modified by NCSA for integration on JYC & Blue Waters
+# Copyright 2011 Cray Inc.  All Rights Reserved.
+# Unpublished Proprietary Information.  This unpublished work is protected 
+# to trade secret, copyright and other laws.  Except as permitted by 
+# contract or express written permission of Cray Inc., no part of this work 
+# or its content may be used, reproduced or disclosed in any form.
+
+jobId="$1"
+user="$2"
+group="$3"
+resId="$4"
+udiRootType="$5"
+udiRootValue="$6"
+shift 6
+
+PATH=${PATH}:/opt/cray/alps/default/bin
+
+nodeContext=""
+udiRootPath=/opt/cray/shifter/18.03.4-1
+
+mode="alps"
+nodelist=""
+tasksPerNode=1
+volumes=()
+
+while getopts ":m:n:N:v:" opt; do
+    case "${opt}" in
+        m)
+            mode="${OPTARG}"
+            if [[ -n "$mode" && "$mode" == "local" ]]; then
+                nodeContext="";
+            fi
+            ;;
+        n)
+            nodelist="${OPTARG}"
+            ;;
+        N)
+            tasksPerNode="${OPTARG}"
+            ;;
+        v)
+            volumes+=(${OPTARG})
+            ;;
+        \?)
+            echo "Invalid option: -${OPTARG}" >&2
+            exit 1
+            ;;
+        :)
+            echo "Option -${OPTARG} requires an argument" >&2
+            exit 1
+            ;;
+    esac
+done
+
+die() {
+    local msg
+    msg="$1"
+    echo "$msg" 1>&2
+    exit 1
+}
+
+[[ -n "$jobId" ]] || die "Job ID is undefined"
+[[ -n "$user" ]] || die "user is undefined"
+[[ -n "$group" ]] || die "group is undefined"
+[[ -n "$udiRootType" ]] || die "udi image type is undefined"
+[[ -n "$udiRootValue" ]] || die "udi image value is undefined"
+
+userUid=$( id -u "$user" )
+groupGid=$( getent group "$group" | awk -F ':' '{print $3}' )
+
+[[ -n "$userUid" ]] || die "user Uid is unknown"
+[[ -n "$groupGid" ]] || die "group Gid is unknown"
+
+jobEnv=()
+entrypoint=""
+udiRootId=""
+echo "Initializing udiRoot, please wait."
+if [[ "$udiRootType" == "DOCKER" ]]; then
+    echo "Retrieving Docker Image"
+    status=$(su - $user -C "$udiRootPath/bin/shifterimg pull $udiRootValue" | grep "Pulling Image: docker:$udiRootValue" | awk {'print $NF'})
+    if [[ "$status" == "READY" ]]; then
+        data=$(su - $user -C "$udiRootPath/bin/shifterimg lookup $udiRootValue")
+        ret=$?
+    else
+        echo "Failed to download docker image: $udiRootValue" 2>&1
+        exit 1
+    fi
+    for item in $data; do
+        if [[ "$item" == "ENV:"* ]]; then
+            envItem=$(echo "$item" | cut -c 5-)
+            jobEnv+=($envItem)
+        elif [[ "$item" == "ENTRY:"* ]]; then
+            entrypoint=$(echo "$item" | cut -c 7-)
+        else
+            udiRootId=$item
+        fi
+    done
+    if [[ -z "$udiRootId" || $ret -ne 0 ]]; then
+        echo "Failed to get udi image: $udiRootValue" 1>&2
+        exit 1
+    fi
+else
+    echo "Unknown image type: $udiRootType" 1>&2
+    exit 1
+fi
+
+umask 066
+
+datadir="/var/run/shifter/jobs/$user/$jobId"
+mkdir -p "$datadir"
+
+umask 022
+
+homeDir=$( eval "echo ~$user" )
+pubKey="$homeDir/.shifter/id_rsa.pub"
+if [[ -r $pubKey ]]; then
+    sshPubKey=$( cat $pubKey )
+else
+    ssh-keygen -t rsa -f "$datadir/id_rsa" -N '' >/dev/null 2>&1
+    chown "$user" "$datadir/id_rsa" "$datadir/id_rsa.pub"
+    chmod 600 "$datadir/id_rsa" "$datadir/id_rsa.pub"
+    sshPubKey=$( cat "$datadir/id_rsa.pub" )
+fi
+
+envFile="$datadir/env";
+for envItem in "${jobEnv[@]}"; do
+    echo "$envItem" >> "$envFile"
+done
+if [[ -n "$entrypoint" ]]; then
+    echo "$entrypoint" > "$datadir/entrypoint"
+fi
+
+reservation=""
+if [[ "$mode" == "local" ]]; then
+    reservation="local";
+elif [[ -n "$BASIL_RESERVATION_ID" ]]; then
+    reservation="$BASIL_RESERVATION_ID"
+else
+<<COMMENT
+    count=0
+    max_count=15
+    while [[ $count -lt $max_count ]]; do
+        reservation=$( apstat -r  | grep "batch:$jobId " | egrep -v "^A" | awk '{ print $1 }' )
+        if [[ -n "$reservation" ]]; then
+            break;
+        fi
+        echo "waiting for reservation identifier"
+        sleep 1
+        count=$(( $count + 1 ))
+    done
+COMMENT
+    reservation="$resId"
+fi
+
+[[ -z "$reservation" ]] && die "Failed to identify job reservation"
+
+job_nodelist="$datadir/nodelist"
+if [[ "$reservation" == "local" ]]; then
+    hostname > "$job_nodelist"
+else
+    apstat -rvvv -R "$reservation" | awk '/^[ ]*PE / { printf "nid%05d\n", $6 }' | sort > "$job_nodelist"
+fi
+
+xtxqtcmd_log="$datadir/log_start"
+xtxqtcmd="/opt/cray/nodehealth/default/bin/xtxqtcmd"
+[[ -x "$xtxqtcmd" ]] || die "Could not find xtxqtcmd. Exiting"
+
+## get list of unique nodes to run setupRoot on
+unique_nodes="$datadir/unique_nodes"
+cat "$job_nodelist" | sort -u > "$unique_nodes"
+
+## minimize nodelist for putting hosts file on the compute node
+if [[ "$mode" == "local" ]]; then
+    minNodes=$( /opt/slurm/default/bin/scontrol show hostnames "$nodelist" | awk -v taskCount="$tasksPerNode" '{ print $1 "/" taskCount }' | xargs )
+else
+    minNodes=$( cat "$job_nodelist" | sort | uniq -c | awk '{ print $2 "/" $1 }' | xargs )
+fi
+echo $minNodes >> $xtxqtcmd_log
+
+cmdStr="/dsl/usr/bin/chroot /dsl ${udiRootPath}/sbin/setupRoot \"$udiRootType\" \"$udiRootId\" -s \"$sshPubKey\" -u \"$user\" -U \"$userUid\" -G \"$groupGid\" -N \"$minNodes\" -V"
+for volume in "${volumes[@]}"; do
+    cmdStr="$cmdStr -v \"$volume\""
+done
+
+ok=0
+expected=0
+if [[ "$mode" == "local" ]]; then
+    echo $cmdStr >> $xtxqtcmd_log
+    /bin/sh -c "$cmdStr"
+    [[ $? -eq 0 ]] && ok=1
+    expected=1
+else
+    echo "$xtxqtcmd $unique_nodes $cmdStr" >> $xtxqtcmd_log
+    "$xtxqtcmd" "$unique_nodes" "$cmdStr" >> $xtxqtcmd_log 2>&1
+    ok=$( grep "Reply (complete) from .* exit code: 0" $xtxqtcmd_log | wc -l )
+    expected=$( cat "$unique_nodes" | wc -l )
+fi
+
+ret=0
+if [[ "$ok" -eq "$expected" ]]; then
+    echo "udiRoot Start successful"
+else
+    echo "udiRoot Start FAILURE, $ok of $expected responses"
+    ret=1
+fi
+exit $ret

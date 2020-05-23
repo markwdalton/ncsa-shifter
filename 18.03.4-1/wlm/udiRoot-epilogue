@@ -1,0 +1,90 @@
+#!/bin/bash
+##  Based on the Cray CCM Epilogue, Heavily modified by NERSC
+# Modified by NCSA for integration on JYC & Blue Waters
+# Copyright 2011 Cray Inc.  All Rights Reserved.
+# Unpublished Proprietary Information.  This unpublished work is protected 
+# to trade secret, copyright and other laws.  Except as permitted by 
+# contract or express written permission of Cray Inc., no part of this work 
+# or its content may be used, reproduced or disclosed in any form.
+
+jobId="$1"
+user="$2"
+group="$3"
+shift 3
+
+nodeContext=""
+udiRootPath=/opt/cray/shifter/18.03.4-1
+
+mode="alps"
+
+while getopts ":m:" opt; do
+    case "${opt}" in
+        m)
+            mode="${OPTARG}"
+            if [[ -n "$mode" && "$mode" == "local" ]]; then
+                nodeContext="";
+            fi
+            ;;
+        \?)
+            echo "Invalid option: -${OPTARG}" >&2
+            exit 1
+            ;;
+        :)
+            echo "Option -${OPTARG} requires an argument" >&2
+            exit 1
+            ;;
+    esac
+done
+
+die() {
+    local msg
+    msg="$1"
+    echo "$msg" 1>&2
+    exit 1
+}
+
+[[ -n "$user" ]] || die "user is undefined"
+[[ -n "$group" ]] || die "group is undefined"
+[[ -n "$jobId" ]] || die "Job ID is undefined"
+
+datadir="/var/run/shifter/jobs/$user/$jobId"
+[[ -d "$datadir" ]] || exit 0
+
+job_nodelist="$datadir/nodelist"
+[[ -e "$job_nodelist" ]] || exit 0
+
+xtxqtcmd_log="$datadir/log_end"
+xtxqtcmd="/opt/cray/nodehealth/default/bin/xtxqtcmd"
+[[ -x "$xtxqtcmd" ]] || die "Could not find xtxqtcmd. Exiting"
+
+unique_nodes="$datadir/unique_nodes"
+[[ -e "$unique_nodes" ]] || exit 0
+
+cmdStr="/dsl/usr/bin/chroot /dsl ${udiRootPath}/sbin/unsetupRoot"
+
+ok=0
+expected=0
+if [[ "$mode" == "local" ]]; then
+    echo $cmdStr >> $xtxqtcmd_log
+    /bin/sh -c "$cmdStr"
+    [[ $? -eq 0 ]] && ok=1
+    expected=1
+else
+    echo "$xtxqtcmd $unique_nodes $cmdStr" >> $xtxqtcmd_log
+    "$xtxqtcmd" "$unique_nodes" "$cmdStr" >> $xtxqtcmd_log 2>&1
+    ok=$( grep "Reply (complete) from .* exit code: 0" $xtxqtcmd_log | wc -l )
+    expected=$( cat "$unique_nodes" | wc -l )
+fi
+
+ret=0
+if [[ "$ok" -eq "$expected" ]]; then
+    echo "udiRoot Cleanup successful"
+else
+    echo "udiRoot Cleanup FAILURE, $ok of $expected responses"
+    ret=1
+fi
+
+if [[ $ret -eq 0 ]]; then
+    rm -r "$datadir"
+fi
+exit $ret

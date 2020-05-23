@@ -1,0 +1,15 @@
+#!/bin/bash
+USER=$1
+JOBID=$2
+SHIFTERLOG=/scratch/system/shifter/shifter18.log
+echo Checking for stray process\(es\) launched by $USER through direct SSH to Shifter container. 
+ps -u $USER
+if [ $? == 0 ]
+then
+    echo Found stray process\(es\) by $USER, killing these process\(es\)...
+    ps -flu ${USER} >> ${SHIFTERLOG}
+    pkill -u $USER
+    echo Stray process cleanup completed. 
+    echo `date` Found stray process\(es\) on `hostname` allocated to job $JOBID left over by user $USER through direct SSH to Shifter container. Cleanup completed. >> $SHIFTERLOG
+fi
+

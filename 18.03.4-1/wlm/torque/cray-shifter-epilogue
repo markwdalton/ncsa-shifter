@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# Copyright (c) 2015 Cray Inc. All Rights Reserved.
+
+# cray-shifter-epilogue gets 5 arguments:
+# 1 -- jobid
+# 2 -- userid
+# 3 -- groupid
+# 4 -- alps resid
+# 5 -- nids
+
+SHIFTER_JOBID=$1 
+SHIFTER_USER=$2
+SHIFTER_GROUP=$3
+
+ROOT=/opt/cray/shifter/18.03.4-1
+EPILOGUE=$ROOT/wlm/udiRoot-epilogue
+QGETENV=$ROOT/wlm/torque/qgetenv
+
+SHIFTER_RESVID=$4
+SHIFTER_NIDS=$5
+
+if [[ ! -x $EPILOGUE ]]; then
+	# shifter/udiRoot is not installed. Nothing to do.
+	exit 0
+fi
+
+SHIFTER_ENV_VAR=$( $QGETENV $SHIFTER_JOBID UDI )
+if [[ -n $SHIFTER_ENV_VAR ]]; then
+	$EPILOGUE $SHIFTER_JOBID $SHIFTER_USER $SHIFTER_GROUP
+        RET=$?
+else
+	# Job did not ask for shifter resources.
+        RET=0
+fi
+
+PCMDCMD="/opt/cray/nodehealth/default/bin/pcmd"
+
+$PCMDCMD -r -q -n ${SHIFTER_NIDS} "/dsl/usr/bin/chroot /dsl sh $ROOT/wlm/torque/cray-shifter-extra-service stop $SHIFTER_JOBID"
+# rm /scratch/system/shifter/jobs/passwd.${SHIFTER_JOBID} /scratch/system/shifter/jobs/group.${SHIFTER_JOBID}
+if [[ -n $SHIFTER_ENV_VAR ]]; then
+    ssh_proc_cleanup=$ROOT/wlm/torque/cray-shifter-ssh-cleanup
+    $PCMDCMD -r -n ${SHIFTER_NIDS} "/dsl/usr/bin/chroot /dsl sh $ssh_proc_cleanup $SHIFTER_USER $SHIFTER_JOBID"
+fi
+exit $RET

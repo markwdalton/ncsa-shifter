@@ -1,0 +1,1 @@
+/opt/cray/shifter/18.03.4-1/usr/share/doc/packages/shifter-imagegw/contrib/gpu/activate_gpu_support.sh

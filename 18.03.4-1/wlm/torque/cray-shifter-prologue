@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Copyright (c) 2015 Cray Inc. All Rights Reserved.
+
+# cray-shifter-prologue gets 5 arguments:
+# 1 -- jobid
+# 2 -- user
+# 3 -- group
+# 4 -- alps resid
+# 5 -- nids
+
+SHIFTER_JOBID=$1
+SHIFTER_USER=$2
+SHIFTER_GROUP=$3
+SHIFTER_RESVID=$4
+SHIFTER_NIDS=$5
+
+ROOT=/opt/cray/shifter/18.03.4-1
+PROLOGUE=$ROOT/wlm/udiRoot-prologue
+QGETENV=$ROOT/wlm/torque/qgetenv
+PCMDCMD="/opt/cray/nodehealth/default/bin/pcmd"
+
+echo Number of nodes: $PBS_NUM_NODES
+echo "Starting munge and nscd service on compute nodes"
+id $SHIFTER_USER
+
+echo "${SHIFTER_JOBID}  ${SHIFTER_USER}:" >> /scratch/vendor/cray/dalton/shifter/shifter18-mwd.log
+id $SHIFTER_USER | sed 's/^/  /g' >> /scratch/vendor/cray/dalton/shifter/shifter18-mwd.log
+ls -l /var/run/nscd/passwd /var/run/nscd/group | sed 's/^/  /g' >> /scratch/vendor/cray/dalton/shifter/shifter18-mwd.log
+
+cp /var/run/nscd/passwd /scratch/system/shifter/jobs/passwd.${SHIFTER_JOBID}
+cp /var/run/nscd/group /scratch/system/shifter/jobs/group.${SHIFTER_JOBID}
+$PCMDCMD -r -q -n ${SHIFTER_NIDS} "/dsl/usr/bin/chroot /dsl sh $ROOT/wlm/torque/cray-shifter-extra-service start $SHIFTER_JOBID"
+
+if [ $? == 0 ]; then
+    echo "Successfully started munge and nscd service on compute nodes"
+fi
+
+if [[ ! -x $PROLOGUE ]]; then
+	# shifter/udiRoot is not installed. Nothing to do.
+	exit 0
+fi
+
+SHIFTER_ENV_VAR=$( $QGETENV $SHIFTER_JOBID UDI )
+if [[ -z $SHIFTER_ENV_VAR ]]; then
+	# Job did not ask for shifter resources.
+	exit 0
+fi
+
+$PROLOGUE $SHIFTER_JOBID $SHIFTER_USER $SHIFTER_GROUP $SHIFTER_RESVID DOCKER $SHIFTER_ENV_VAR
+RET=$?
+
+exit $RET

@@ -1,0 +1,27 @@
+#!/bin/bash
+
+opts=$1
+jobid=$2
+KMODIR=/opt/cray/shifter/16.08.3-1.0502.8871-cray_gem/modules/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel
+case $opts in
+start)
+    echo Starting MUNGE service. 
+    /etc/init.d/munge start
+    cp /scratch/system/shifter/jobs/passwd.$jobid /var/run/nscd/passwd
+    cp /scratch/system/shifter/jobs/group.$jobid /var/run/nscd/group
+    echo Starting NSCD service. 
+    /etc/init.d/nscd start
+    /sbin/insmod $KMODIR/drivers/block/loop.ko max_loop=128
+    /sbin/insmod $KMODIR/fs/squashfs/squashfs.ko
+    # /sbin/insmod /opt/bwpy/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_s/kernel/fs/squashfs/squashfs.ko
+    ;;
+stop)
+    echo Stopping NSCD service. 
+    /etc/init.d/nscd stop
+    echo Stopping MUNGE service. 
+    /etc/init.d/munge stop
+    #rm /var/run/nscd/passwd /var/run/nscd/group /var/run/nscd/services 
+    ;;
+*)
+    echo Unknown option
+esac
